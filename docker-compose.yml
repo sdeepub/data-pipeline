@@ -29,11 +29,6 @@ services:
     volumes:
       - zookeeper-data:/var/lib/zookeeper/data
       - zookeeper-logs:/var/lib/zookeeper/log
-    healthcheck:
-      test: echo ruok | nc localhost 2181 | grep imok
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # ── Kafka ────────────────────────────────────────────────────────────────────
   kafka:
@@ -41,8 +36,7 @@ services:
     container_name: kafka
     restart: unless-stopped
     depends_on:
-      zookeeper:
-        condition: service_healthy
+      - zookeeper
     ports:
       - "9092:9092"    # external (host → kafka)
       - "29092:29092"  # internal (container → container)
@@ -79,12 +73,6 @@ services:
     volumes:
       - iotdb-data:/iotdb/data
       - iotdb-logs:/iotdb/logs
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 40s
 
   # ── Flink JobManager ─────────────────────────────────────────────────────────
   flink-jobmanager:
@@ -102,15 +90,9 @@ services:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         rest.bind-address: 0.0.0.0
-        state.backend: filesystem
-        state.checkpoints.dir: file:///tmp/flink-checkpoints
-    volumes:
-      - flink-checkpoints:/tmp/flink-checkpoints
     depends_on:
-      kafka:
-        condition: service_healthy
-      iotdb:
-        condition: service_healthy
+      - kafka
+      - iotdb
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
       interval: 15s
@@ -133,8 +115,6 @@ services:
         jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: 4
         taskmanager.memory.process.size: 1024m
-    volumes:
-      - flink-checkpoints:/tmp/flink-checkpoints
     depends_on:
       flink-jobmanager:
         condition: service_healthy
@@ -148,20 +128,14 @@ services:
     container_name: flink-job
     restart: on-failure
     command: >
-      bash -c "
-        echo 'Waiting for Flink JobManager...' &&
-        sleep 20 &&
-        python3 /opt/flink/usrlib/pipeline_job.py
-      "
+      bash -c "echo 'Waiting for Flink JobManager...' && sleep 20 && flink run -m flink-jobmanager:8081 -py /opt/flink/usrlib/pipeline_job.py"
     environment:
       <<: [*kafka-env, *iotdb-env]
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
     depends_on:
-      flink-jobmanager:
-        condition: service_healthy
-      iotdb:
-        condition: service_healthy
+      - flink-jobmanager
+      - iotdb
 
   # ── Machine Simulator ────────────────────────────────────────────────────────
   simulator:
@@ -199,8 +173,7 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
     depends_on:
-      iotdb:
-        condition: service_healthy
+      - iotdb
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 15s
@@ -214,7 +187,6 @@ volumes:
   kafka-data:
   iotdb-data:
   iotdb-logs:
-  flink-checkpoints:
   grafana-data:
 
 # ─── Network ──────────────────────────────────────────────────────────────────
