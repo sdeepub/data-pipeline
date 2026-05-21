@@ -160,7 +160,9 @@ services:
 
   # ── Grafana ──────────────────────────────────────────────────────────────────
   grafana:
-    image: grafana/grafana:10.2.2
+    build:
+      context: ./grafana
+      dockerfile: Dockerfile
     container_name: grafana
     restart: unless-stopped
     ports:
@@ -168,10 +170,10 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_INSTALL_PLUGINS: grafana-iotdb-datasource
       GF_AUTH_ANONYMOUS_ENABLED: "false"
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - iotdb
     healthcheck:
