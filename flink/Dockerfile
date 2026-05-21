@@ -1,35 +1,30 @@
-# ─── Flink Python Job Image ───────────────────────────────────────────────────
-# Extends the official Flink image with PyFlink and IoTDB client.
-FROM flink:1.17-scala_2.12-java11
+FROM flink:1.17.2-scala_2.12-java11
 
-# Install Python 3.11 and pip
+USER root
+
+# Install system dependencies required by PyFlink
 RUN apt-get update && apt-get install -y \
-    python3.11 \
-    python3.11-dev \
+    python3 \
     python3-pip \
+    python3-dev \
+    build-essential \
+    gcc \
+    g++ \
+    libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Make python3.11 the default python3
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
-    && update-alternatives --install /usr/bin/python  python  /usr/bin/python3.11 1
+WORKDIR /opt/flink
 
-WORKDIR /opt/flink/usrlib
+# Upgrade pip tooling first
+RUN pip3 install --upgrade pip setuptools wheel
 
+# Copy requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-COPY pipeline_job.py .
+# Install Python dependencies
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Flink will submit this job on container start
-ENV KAFKA_BOOTSTRAP_SERVERS=kafka:29092 \
-    KAFKA_TOPIC=sensor-topic \
-    KAFKA_DEAD_LETTER_TOPIC=sensor-topic-dlq \
-    KAFKA_GROUP_ID=flink-pipeline \
-    IOTDB_HOST=iotdb \
-    IOTDB_PORT=6667 \
-    IOTDB_USER=root \
-    IOTDB_PASSWORD=root \
-    IOTDB_STORAGE_GROUP=root.factory1 \
-    CHECKPOINT_DIR=/tmp/flink-checkpoints
+# Copy Flink job
+COPY pipeline_job.py /opt/flink/usrlib/pipeline_job.py
 
-CMD ["python3", "pipeline_job.py"]
+USER flink
