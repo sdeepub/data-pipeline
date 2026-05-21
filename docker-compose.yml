@@ -1,0 +1,232 @@
+version: '3.8'
+
+services:
+  # ============================================================
+  # ZOOKEEPER - Coordination service for Kafka
+  # ============================================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    hostname: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 5
+      ZOOKEEPER_INIT_LIMIT: 10
+    ports:
+      - "2181:2181"
+    networks:
+      - pipeline-net
+    healthcheck:
+      test: echo ruok | nc localhost 2181
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================
+  # KAFKA - Message broker
+  # ============================================================
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    hostname: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+    networks:
+      - pipeline-net
+    healthcheck:
+      test: kafka-topics --bootstrap-server localhost:9092 --list
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================
+  # IOTDB - Time-series database
+  # ============================================================
+  iotdb:
+    image: apache/iotdb:latest
+    container_name: iotdb
+    hostname: iotdb
+    ports:
+      - "6667:6667"
+      - "31999:31999"
+      - "8080:8080"
+    environment:
+      cn_system_dir: /iotdb/data/system
+      cn_data_dirs: /iotdb/data/data
+      cn_wal_dir: /iotdb/data/wal
+      cn_consensus_dir: /iotdb/data/consensus
+    volumes:
+      - iotdb-data:/iotdb/data
+    networks:
+      - pipeline-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================
+  # FLINK - Stream processing
+  # ============================================================
+  flink-jobmanager:
+    image: flink:1.17-scala_2.12-java11
+    container_name: flink-jobmanager
+    hostname: flink-jobmanager
+    ports:
+      - "8081:8081"
+      - "6123:6123"
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - FLINK_PROPERTIES=jobmanager.rpc.address:flink-jobmanager
+    command: jobmanager
+    networks:
+      - pipeline-net
+    healthcheck:
+      test: curl -f http://localhost:8081/v1/overview || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  flink-taskmanager-1:
+    image: flink:1.17-scala_2.12-java11
+    container_name: flink-taskmanager-1
+    hostname: flink-taskmanager-1
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=4
+      - FLINK_PROPERTIES=jobmanager.rpc.address:flink-jobmanager
+    command: taskmanager
+    networks:
+      - pipeline-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  flink-taskmanager-2:
+    image: flink:1.17-scala_2.12-java11
+    container_name: flink-taskmanager-2
+    hostname: flink-taskmanager-2
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink-jobmanager
+      - TASK_MANAGER_NUMBER_OF_TASK_SLOTS=4
+      - FLINK_PROPERTIES=jobmanager.rpc.address:flink-jobmanager
+    command: taskmanager
+    networks:
+      - pipeline-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================
+  # GRAFANA - Visualization dashboard
+  # ============================================================
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: grafana
+    hostname: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=alexanderzobnin-zabbix-app
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    networks:
+      - pipeline-net
+    healthcheck:
+      test: curl -f http://localhost:3000/api/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================
+  # MACHINE SIMULATORS - 100 instances of IoT machines
+  # ============================================================
+  simulator:
+    build:
+      context: ./simulators
+      dockerfile: Dockerfile
+    image: machine-simulator:latest
+    depends_on:
+      kafka:
+        condition: service_healthy
+    deploy:
+      replicas: 3  # Start with 3, scale up later
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      LOG_LEVEL: INFO
+    networks:
+      - pipeline-net
+    restart: on-failure
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+networks:
+  pipeline-net:
+    driver: bridge
+
+volumes:
+  iotdb-data:
+  grafana-storage:
