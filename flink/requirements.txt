@@ -1,0 +1,2 @@
+apache-flink==1.17.2
+iotdb-session==1.3.0
