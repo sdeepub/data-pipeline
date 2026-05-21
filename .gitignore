@@ -1,0 +1,36 @@
+# Docker volumes
+iotdb-data/
+grafana-storage/
+kafka-data/
+zookeeper-data/
+
+# Minikube
+.minikube/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+.env.local
+
+# Emacs backup and auto-save files
+*~
+\#*#
+.#*
+*.elc
+auto-save-list
+tramp
