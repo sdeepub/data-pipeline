@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simulator
+  namespace: data-pipeline
+  labels:
+    app: simulator
+spec:
+  replicas: 3   # Matches docker-compose; scale with kubectl scale deploy/simulator --replicas=N
+  selector:
+    matchLabels:
+      app: simulator
+  template:
+    metadata:
+      labels:
+        app: simulator
+    spec:
+      # Wait for Kafka to be available before starting
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z kafka 29092; do
+                echo "Waiting for Kafka...";
+                sleep 3;
+              done;
+              echo "Kafka is up!"
+      containers:
+        - name: simulator
+          # Use the image you built locally and loaded into minikube:
+          #   docker build -t machine-simulator:latest ./simulators
+          #   minikube image load machine-simulator:latest
+          image: machine-simulator:latest
+          imagePullPolicy: Never   # Use local image from minikube cache
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:29092"
+            - name: LOG_LEVEL
+              value: "INFO"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+          restartPolicy: Always

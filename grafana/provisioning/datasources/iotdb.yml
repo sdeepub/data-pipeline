@@ -6,9 +6,7 @@ datasources:
     access: proxy
     url: http://iotdb:18080
     isDefault: true
-
     jsonData:
       username: root
-
     secureJsonData:
       password: root

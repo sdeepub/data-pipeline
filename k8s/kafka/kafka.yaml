@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: data-pipeline
+  labels:
+    app: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.5.0
+          ports:
+            - containerPort: 9092
+              name: external
+            - containerPort: 29092
+              name: internal
+          env:
+            - name: KAFKA_BROKER_ID
+              value: "1"
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: "zookeeper:2181"
+            # Internal (pod-to-pod) uses PLAINTEXT on 29092
+            # External (NodePort/port-forward) uses PLAINTEXT_HOST on 9092
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "true"
+            - name: KAFKA_LOG_RETENTION_HOURS
+              value: "24"
+            - name: KAFKA_LOG_SEGMENT_BYTES
+              value: "1073741824"
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "kafka-topics --bootstrap-server localhost:9092 --list"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "kafka-topics --bootstrap-server localhost:9092 --list"
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+---
+# Internal ClusterIP — pod-to-pod traffic (simulators, Flink)
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: data-pipeline
+  labels:
+    app: kafka
+spec:
+  selector:
+    app: kafka
+  ports:
+    - name: internal
+      port: 29092
+      targetPort: 29092
+    - name: external
+      port: 9092
+      targetPort: 9092
+---
+# NodePort for external access / kubectl port-forward
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-external
+  namespace: data-pipeline
+  labels:
+    app: kafka
+spec:
+  type: NodePort
+  selector:
+    app: kafka
+  ports:
+    - name: external
+      port: 9092
+      targetPort: 9092
+      nodePort: 30092
