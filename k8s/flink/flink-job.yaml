@@ -1,0 +1,100 @@
+---
+# ============================================================
+# Flink Job Submission — Kubernetes Job
+#
+# Equivalent of the docker-compose `flink-job` service.
+# Runs once: waits for the JobManager REST API to be healthy,
+# then submits pipeline_job.py via `flink run -py`.
+# Kubernetes restarts it (OnFailure) if submission fails.
+#
+# Apply AFTER flink-jobmanager and flink-taskmanager are Ready:
+#   kubectl apply -f k8s/flink/flink-job.yaml
+#
+# Monitor:
+#   kubectl logs -n data-pipeline job/flink-job-submit -f
+# ============================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flink-job-submit
+  namespace: data-pipeline
+  labels:
+    app: flink
+    component: job-submit
+spec:
+  # Do not retry more than 3 times to avoid a restart loop
+  # hiding a real configuration error.
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: flink
+        component: job-submit
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        # Gate: wait until JobManager REST is accepting connections
+        - name: wait-for-jobmanager
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Flink JobManager at flink-jobmanager:8081..."
+              until nc -z flink-jobmanager 8081; do
+                echo "  not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "JobManager is up — submitting job."
+        # Gate: wait until at least one TaskManager has registered
+        # (gives the cluster a moment to be fully operational)
+        - name: wait-for-taskmanagers
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for TaskManagers to register..."
+              sleep 15
+              echo "Proceeding with job submission."
+      containers:
+        - name: flink-job-submit
+          image: flink-pipeline:latest
+          imagePullPolicy: Never
+          command:
+            - flink
+            - run
+            - -m
+            - flink-jobmanager:8081
+            - -py
+            - /opt/flink/usrlib/pipeline_job.py
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:29092"
+            - name: KAFKA_TOPIC
+              value: "sensor-topic"
+            - name: KAFKA_DEAD_LETTER_TOPIC
+              value: "sensor-topic-dlq"
+            - name: KAFKA_GROUP_ID
+              value: "flink-pipeline"
+            - name: IOTDB_HOST
+              value: "iotdb"
+            - name: IOTDB_PORT
+              value: "6667"
+            - name: IOTDB_USER
+              value: "root"
+            - name: IOTDB_PASSWORD
+              value: "root"
+            - name: IOTDB_STORAGE_GROUP
+              value: "root.factory1"
+            - name: CHECKPOINT_DIR
+              value: "/flink-checkpoints"
+            - name: FLINK_PROPERTIES
+              value: "jobmanager.rpc.address:flink-jobmanager\n"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

@@ -37,6 +37,11 @@ from pyflink.datastream.connectors.kafka import (
 )
 from pyflink.common import WatermarkStrategy, Duration, Types
 from pyflink.common.serialization import SimpleStringSchema
+# FIX: Import TimestampAssigner base class for a serializable implementation.
+#      An inline lambda cannot be pickled by the Flink distributed runtime
+#      and raises PicklingError when the JobManager ships tasks to remote
+#      TaskManagers.  A named class is fully serializable.
+from pyflink.common.watermark_strategy import TimestampAssigner
 from pyflink.datastream.functions import (
     MapFunction, FilterFunction, ProcessWindowFunction, FlatMapFunction
 )
@@ -163,6 +168,31 @@ def write_aggregation_to_iotdb(session: Session, agg: dict) -> None:
         values=agg_values,
     )
 
+# ─── Timestamp Assigner ───────────────────────────────────────────────────────
+
+# FIX: Replace the inline lambda with a named class that Flink can pickle
+#      and ship to remote TaskManagers in distributed execution.
+#
+#      The original code used:
+#        .with_timestamp_assigner(
+#            lambda event, _: json.loads(event).get("timestamp", int(time.time() * 1000))
+#        )
+#      Python lambdas are NOT reliably serializable across processes — Flink's
+#      distributed task dispatch calls pickle.dumps() on all operators, and
+#      lambdas that close over module-level names can fail with PicklingError.
+#      A named top-level class is always safely serializable.
+class KafkaEventTimestampAssigner(TimestampAssigner):
+    """
+    Extracts the event-time timestamp from the Kafka message payload.
+    Falls back to processing time if the field is missing or unparseable.
+    """
+    def extract_timestamp(self, value: str, record_timestamp: int) -> int:
+        try:
+            return int(json.loads(value).get("timestamp", int(time.time() * 1000)))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return int(time.time() * 1000)
+
+
 # ─── Flink Functions ─────────────────────────────────────────────────────────
 
 class ParseAndValidate(FlatMapFunction):
@@ -236,6 +266,11 @@ class WriteToIoTDB(MapFunction):
         except Exception as e:
             log.error(f"IoTDB write error for {record.get('machine_id')}: {e}")
             # Reset session so next call re-connects
+            try:
+                if self._session:
+                    self._session.close()
+            except Exception:
+                pass
             self._session = None
         return value  # pass through for downstream operators
 
@@ -288,6 +323,11 @@ class TumblingWindowAggregation(ProcessWindowFunction):
             write_aggregation_to_iotdb(self._get_session(), agg)
         except Exception as e:
             log.error(f"IoTDB aggregation write error for {key}: {e}")
+            try:
+                if self._session:
+                    self._session.close()
+            except Exception:
+                pass
             self._session = None
 
         yield json.dumps(agg)
@@ -316,13 +356,12 @@ def build_pipeline():
         .build()
     )
 
-    # Watermark strategy — allow up to 5s of event-time lateness
+    # FIX: Watermark strategy now uses a named TimestampAssigner class
+    # instead of an inline lambda.  See KafkaEventTimestampAssigner above.
     watermark_strategy = (
         WatermarkStrategy
         .for_bounded_out_of_orderness(Duration.of_seconds(5))
-        .with_timestamp_assigner(
-            lambda event, _: json.loads(event).get("timestamp", int(time.time() * 1000))
-        )
+        .with_timestamp_assigner(KafkaEventTimestampAssigner())
     )
 
     raw_stream = env.from_source(

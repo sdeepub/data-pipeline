@@ -1,3 +1,16 @@
+---
+# ============================================================
+# Machine Simulator Deployment
+#
+# FIX: Removed `restartPolicy: Always` from inside the
+#      containers list — that field is only valid on the Pod
+#      spec, not on individual containers.  Its presence caused
+#      kubectl to reject the entire manifest with a validation
+#      error, preventing the Deployment from being created.
+#
+#      Deployments always restart failed pods by default, so
+#      no functional behaviour is lost by removing the line.
+# ============================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,7 +19,7 @@ metadata:
   labels:
     app: simulator
 spec:
-  replicas: 3   # Matches docker-compose; scale with kubectl scale deploy/simulator --replicas=N
+  replicas: 3
   selector:
     matchLabels:
       app: simulator
@@ -30,14 +43,19 @@ spec:
               echo "Kafka is up!"
       containers:
         - name: simulator
-          # Use the image you built locally and loaded into minikube:
-          #   docker build -t machine-simulator:latest ./simulators
-          #   minikube image load machine-simulator:latest
           image: machine-simulator:latest
-          imagePullPolicy: Never   # Use local image from minikube cache
+          imagePullPolicy: Never
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: "kafka:29092"
+            - name: KAFKA_TOPIC
+              value: "sensor-topic"
+            - name: NUM_MACHINES
+              value: "10"
+            - name: SEND_INTERVAL_SEC
+              value: "2"
+            - name: MACHINE_PREFIX
+              value: "MC"
             - name: LOG_LEVEL
               value: "INFO"
           resources:
@@ -47,4 +65,5 @@ spec:
             limits:
               cpu: "250m"
               memory: "128Mi"
-          restartPolicy: Always
+          # No restartPolicy here — belongs on spec.template.spec, not containers[]
+          # Deployments automatically restart terminated/failed pods.

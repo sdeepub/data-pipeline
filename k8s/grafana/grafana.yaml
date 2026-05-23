@@ -1,3 +1,4 @@
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -20,6 +21,48 @@ stringData:
   admin-user: admin
   admin-password: admin   # Change before production!
 ---
+# ============================================================
+# Grafana datasource provisioning ConfigMap
+#
+# FIX: The provisioning file previously lived only on disk and
+# was never surfaced into the K8s pod.  This ConfigMap carries
+# the datasource YAML so the pod auto-provisions IoTDB on boot
+# without any manual UI steps.
+#
+# FIX: Corrected the IoTDB REST port from 18080 → 8080.
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: data-pipeline
+data:
+  iotdb.yml: |
+    apiVersion: 1
+
+    datasources:
+      - name: IoTDB
+        type: apache-iotdb-datasource
+        access: proxy
+        url: http://iotdb:8080
+        isDefault: true
+        jsonData:
+          username: root
+        secureJsonData:
+          password: root
+---
+# ============================================================
+# Grafana Deployment
+#
+# FIX 1: GF_INSTALL_PLUGINS corrected from
+#         "alexanderzobnin-zabbix-app" → "apache-iotdb-datasource"
+#         (the Zabbix plugin was completely wrong and would make
+#         the datasource setup screen show no IoTDB option)
+#
+# FIX 2: grafana-provisioning ConfigMap mounted at
+#         /etc/grafana/provisioning/datasources so IoTDB is
+#         configured automatically on every fresh deploy.
+# ============================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -56,11 +99,17 @@ spec:
                   key: admin-password
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
+            # FIX: was "alexanderzobnin-zabbix-app"
             - name: GF_INSTALL_PLUGINS
-              value: "alexanderzobnin-zabbix-app"
+              value: "apache-iotdb-datasource"
           volumeMounts:
             - name: grafana-storage
               mountPath: /var/lib/grafana
+            # FIX: mount provisioning ConfigMap so datasource
+            # is auto-configured on every pod start
+            - name: grafana-provisioning
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /api/health
@@ -87,6 +136,9 @@ spec:
         - name: grafana-storage
           persistentVolumeClaim:
             claimName: grafana-storage
+        - name: grafana-provisioning
+          configMap:
+            name: grafana-provisioning
 ---
 apiVersion: v1
 kind: Service

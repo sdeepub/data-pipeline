@@ -17,9 +17,33 @@ data:
     parallelism.default: 2
     rest.port: 8081
     rest.address: 0.0.0.0
+    state.checkpoints.dir: file:///flink-checkpoints
+    execution.checkpointing.interval: 60000
+    execution.checkpointing.mode: EXACTLY_ONCE
+---
+# ============================================================
+# PersistentVolumeClaim for Flink checkpoints
+# (replaces ephemeral /tmp — survives pod restarts)
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: flink-checkpoints
+  namespace: data-pipeline
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
 ---
 # ============================================================
 # Flink JobManager
+# FIX 1: Uses custom image (flink-pipeline:latest) built from
+#         flink/Dockerfile — includes PyFlink, IoTDB SDK,
+#         Kafka connector JARs, and pipeline_job.py
+# FIX 2: ConfigMap mounted at /opt/flink/conf/flink-conf.yaml
+# FIX 3: Checkpoint PVC mounted at /flink-checkpoints
 # ============================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -43,7 +67,11 @@ spec:
     spec:
       containers:
         - name: flink-jobmanager
-          image: flink:1.17-scala_2.12-java11
+          # Build locally and load into Minikube:
+          #   docker build -t flink-pipeline:latest ./flink
+          #   minikube image load flink-pipeline:latest
+          image: flink-pipeline:latest
+          imagePullPolicy: Never
           command: ["/docker-entrypoint.sh"]
           args: ["jobmanager"]
           ports:
@@ -54,8 +82,20 @@ spec:
           env:
             - name: JOB_MANAGER_RPC_ADDRESS
               value: flink-jobmanager
+            # FLINK_PROPERTIES is the env-var entrypoint reads at startup;
+            # the ConfigMap volume below provides the full config file.
             - name: FLINK_PROPERTIES
-              value: "jobmanager.rpc.address:flink-jobmanager\n"
+              valueFrom:
+                configMapKeyRef:
+                  name: flink-config
+                  key: flink-conf.yaml
+          volumeMounts:
+            - name: flink-config-volume
+              mountPath: /opt/flink/conf/flink-conf.yaml
+              subPath: flink-conf.yaml
+              readOnly: true
+            - name: flink-checkpoints
+              mountPath: /flink-checkpoints
           readinessProbe:
             httpGet:
               path: /v1/overview
@@ -78,6 +118,13 @@ spec:
             limits:
               cpu: "1000m"
               memory: "2Gi"
+      volumes:
+        - name: flink-config-volume
+          configMap:
+            name: flink-config
+        - name: flink-checkpoints
+          persistentVolumeClaim:
+            claimName: flink-checkpoints
 ---
 apiVersion: v1
 kind: Service
@@ -116,7 +163,12 @@ spec:
       nodePort: 30081
 ---
 # ============================================================
-# Flink TaskManagers (2 replicas, matching docker-compose)
+# Flink TaskManagers (2 replicas)
+# FIX 1: Uses custom image (flink-pipeline:latest)
+# FIX 2: ConfigMap mounted
+# FIX 3: Checkpoint PVC shared with JobManager (ReadWriteOnce
+#         works for single-node Minikube; use ReadWriteMany
+#         with an NFS-backed StorageClass in multi-node clusters)
 # ============================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -140,7 +192,8 @@ spec:
     spec:
       containers:
         - name: flink-taskmanager
-          image: flink:1.17-scala_2.12-java11
+          image: flink-pipeline:latest
+          imagePullPolicy: Never
           command: ["/docker-entrypoint.sh"]
           args: ["taskmanager"]
           env:
@@ -149,7 +202,38 @@ spec:
             - name: TASK_MANAGER_NUMBER_OF_TASK_SLOTS
               value: "4"
             - name: FLINK_PROPERTIES
-              value: "jobmanager.rpc.address:flink-jobmanager\n"
+              valueFrom:
+                configMapKeyRef:
+                  name: flink-config
+                  key: flink-conf.yaml
+            # Pipeline env vars — passed through to pipeline_job.py
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:29092"
+            - name: KAFKA_TOPIC
+              value: "sensor-topic"
+            - name: KAFKA_DEAD_LETTER_TOPIC
+              value: "sensor-topic-dlq"
+            - name: KAFKA_GROUP_ID
+              value: "flink-pipeline"
+            - name: IOTDB_HOST
+              value: "iotdb"
+            - name: IOTDB_PORT
+              value: "6667"
+            - name: IOTDB_USER
+              value: "root"
+            - name: IOTDB_PASSWORD
+              value: "root"
+            - name: IOTDB_STORAGE_GROUP
+              value: "root.factory1"
+            - name: CHECKPOINT_DIR
+              value: "/flink-checkpoints"
+          volumeMounts:
+            - name: flink-config-volume
+              mountPath: /opt/flink/conf/flink-conf.yaml
+              subPath: flink-conf.yaml
+              readOnly: true
+            - name: flink-checkpoints
+              mountPath: /flink-checkpoints
           resources:
             requests:
               cpu: "250m"
@@ -157,3 +241,10 @@ spec:
             limits:
               cpu: "1000m"
               memory: "2Gi"
+      volumes:
+        - name: flink-config-volume
+          configMap:
+            name: flink-config
+        - name: flink-checkpoints
+          persistentVolumeClaim:
+            claimName: flink-checkpoints

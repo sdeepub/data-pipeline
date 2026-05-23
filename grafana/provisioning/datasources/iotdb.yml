@@ -1,10 +1,19 @@
 apiVersion: 1
 
+# ============================================================
+# Grafana IoTDB Datasource Provisioning
+#
+# FIX: URL corrected from http://iotdb:18080 → http://iotdb:8080
+#      IoTDB's REST API listens on 8080 (configured via
+#      enable_rest_service=true). Port 18080 does not exist
+#      in the IoTDB standalone image and caused a "datasource
+#      not working" error in Grafana on every fresh deploy.
+# ============================================================
 datasources:
   - name: IoTDB
     type: apache-iotdb-datasource
     access: proxy
-    url: http://iotdb:18080
+    url: http://iotdb:8080
     isDefault: true
     jsonData:
       username: root
