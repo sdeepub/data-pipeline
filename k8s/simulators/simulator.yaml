@@ -1,16 +1,4 @@
 ---
-# ============================================================
-# Machine Simulator Deployment
-#
-# FIX: Removed `restartPolicy: Always` from inside the
-#      containers list — that field is only valid on the Pod
-#      spec, not on individual containers.  Its presence caused
-#      kubectl to reject the entire manifest with a validation
-#      error, preventing the Deployment from being created.
-#
-#      Deployments always restart failed pods by default, so
-#      no functional behaviour is lost by removing the line.
-# ============================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,7 +16,6 @@ spec:
       labels:
         app: simulator
     spec:
-      # Wait for Kafka to be available before starting
       initContainers:
         - name: wait-for-kafka
           image: busybox:1.35
@@ -36,10 +23,9 @@ spec:
             - sh
             - -c
             - |
-              until nc -z kafka 29092; do
-                echo "Waiting for Kafka...";
-                sleep 3;
-              done;
+              until nc -z kafka-broker 29092; do
+                echo "Waiting for Kafka..."; sleep 3;
+              done
               echo "Kafka is up!"
       containers:
         - name: simulator
@@ -47,7 +33,7 @@ spec:
           imagePullPolicy: Never
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
-              value: "kafka:29092"
+              value: "kafka-broker:29092"
             - name: KAFKA_TOPIC
               value: "sensor-topic"
             - name: NUM_MACHINES
@@ -65,5 +51,3 @@ spec:
             limits:
               cpu: "250m"
               memory: "128Mi"
-          # No restartPolicy here — belongs on spec.template.spec, not containers[]
-          # Deployments automatically restart terminated/failed pods.
