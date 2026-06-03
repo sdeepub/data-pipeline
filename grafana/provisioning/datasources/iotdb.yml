@@ -2,10 +2,12 @@ apiVersion: 1
 
 datasources:
   - name: IoTDB
+    uid: iotdb-ds
     type: apache-iotdb-datasource
     access: proxy
-    url: http://iotdb:18080
+    url: http://iotdb:8080
     isDefault: true
+    editable: true
     jsonData:
       username: root
     secureJsonData:

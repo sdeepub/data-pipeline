@@ -70,6 +70,7 @@ services:
       - "8080:8080"   # REST API (used by Grafana plugin)
     environment:
       - enable_rest_service=true
+      - rest_service_port=8080
     volumes:
       - iotdb-data:/iotdb/data
       - iotdb-logs:/iotdb/logs
